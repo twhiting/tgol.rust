@@ -50,13 +50,16 @@ fn main() -> Result<(), Error> {
         Pixels::new(WIDTH, HEIGHT, surface_texture)?
     };
 
-    // let mut life = ConwayGrid::new_random(WIDTH as usize, HEIGHT as usize);
+    let mut life = Grid::new_empty_grid(WIDTH as usize, HEIGHT as usize);
+    life.randomize();
+
     let mut paused = false;
     let mut draw_state: Option<bool> = None;
 
     event_loop.run(move |event, _, control_flow| {
         if let Event::RedrawRequested(_) = event {
-            // life.draw(pixels.get_frame_mut())
+            life.draw(pixels.get_frame_mut());
+
             if pixels
                 .render()
                 .map_err(|e| error!("pixels.render() failed: {}", e))
@@ -91,7 +94,7 @@ fn main() -> Result<(), Error> {
 
             // [R]          = Randomize TGOL
             if input.key_pressed(VirtualKeyCode::R) {
-                // life.randomize();
+                life.randomize();
             }
 
             // Mouse events
@@ -120,7 +123,7 @@ fn main() -> Result<(), Error> {
 
             if input.mouse_pressed(0) {
                 debug!("Mouse click at {:?}", mouse_cell);
-                //draw_state = Some(life.toggle(mouse_cell.0, mouse_cell.1));
+                draw_state = Some(life.toggle(mouse_cell.0, mouse_cell.1));
             } else if let Some(draw_alive) = draw_state {
                 let release = input.mouse_released(0);
                 let held = input.mouse_held(0);
@@ -132,13 +135,15 @@ fn main() -> Result<(), Error> {
                 // in the middle of drawing, keep going.
                 if release || held {
                     debug!("Draw line of {:?}", draw_alive);
-                    /* life.set_line(
+                    life.set_line(
                         mouse_prev_cell.0,
                         mouse_prev_cell.1,
                         mouse_cell.0,
                         mouse_cell.1,
                         draw_alive,
-                    ); */
+                    );
+
+                    life.draw(pixels.get_frame_mut());
                 }
 
                 // If they let go or are otherwise not clicking anymore, stop drawing.
@@ -156,9 +161,141 @@ fn main() -> Result<(), Error> {
 
             if !paused || input.key_pressed_os(VirtualKeyCode::Space) {
                 //life.update();
+                life.draw(pixels.get_frame_mut());
             }
 
             window.request_redraw();
         }
     });
+}
+
+/// Generate a pseudorandom seed for the game's PRNG.
+fn generate_seed() -> (u64, u64) {
+    use byteorder::{ByteOrder, NativeEndian};
+    use getrandom::getrandom;
+
+    let mut seed = [0_u8; 16];
+
+    getrandom(&mut seed).expect("failed to getrandom");
+
+    (
+        NativeEndian::read_u64(&seed[0..8]),
+        NativeEndian::read_u64(&seed[8..16]),
+    )
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Cell {
+    // Alive: Is this cell active or not
+    //
+    alive: bool,
+
+    // Heat: Trailing effect of the cell. Decays over time.
+    //
+    heat: u8,
+}
+
+impl Cell {
+    // Initialize a new cell (alive or dead)
+    fn new(alive: bool) -> Self {
+        Self {
+            alive: alive,
+            heat: 0,
+        }
+    }
+
+    fn set(&mut self, alive: bool) {
+        self.alive = alive;
+    }
+
+    fn toggle(&mut self) -> bool {
+        self.alive = !self.alive;
+        self.alive
+    }
+}
+
+const CELL_ALIVE_THRESHOLD: f32 = 0.3;
+const GREEN: [u8; 4] = [0, 255, 0, 255];
+//const RED: [u8; 4] = [255, 0, 0, 255];
+//const BLUE: [u8; 4] = [0, 0, 255, 255];
+//const YELLOW: [u8; 4] = [255, 255, 0, 255];
+
+struct Grid {
+    grid: Vec<Cell>,
+    width: usize,
+    height: usize,
+}
+
+impl Grid {
+    fn new_empty_grid(width: usize, height: usize) -> Self {
+        assert!(width != 0);
+        assert!(height != 0);
+
+        let size = width.checked_mul(height).expect("Grid too big (overflow)");
+        Self {
+            grid: vec![Cell::default(); size],
+            width,
+            height,
+        }
+    }
+
+    fn randomize(&mut self) {
+        let mut rand: randomize::PCG32 = generate_seed().into();
+
+        for cell in self.grid.iter_mut() {
+            let alive = randomize::f32_half_open_right(rand.next_u32()) > CELL_ALIVE_THRESHOLD;
+            *cell = Cell::new(alive);
+        }
+        // TODO: Smooth out the noise from randomness
+        // TODO: Once we smooth out the randomness get rid of the leftover heatmap
+    }
+
+    fn draw(&self, screen: &mut [u8]) {
+        debug_assert_eq!(screen.len(), 4 * self.grid.len());
+
+        for (cell, pix) in self.grid.iter().zip(screen.chunks_exact_mut(4)) {
+            let color = if cell.alive {
+                GREEN
+            } else {
+                [0, 0, cell.heat, 0xff]
+            };
+
+            pix.copy_from_slice(&color);
+        }
+    }
+
+    fn toggle(&mut self, x: isize, y: isize) -> bool {
+        if let Some(i) = self.grid_idx(x, y) {
+            self.grid[i].toggle()
+        } else {
+            false
+        }
+    }
+
+    fn set_line(&mut self, x0: isize, y0: isize, x1: isize, y1: isize, alive: bool) {
+        // probably should do sutherland-hodgeman if this were more serious.
+        // instead just clamp the start pos, and draw until moving towards the
+        // end pos takes us out of bounds.
+        let x0 = x0.max(0).min(self.width as isize);
+        let y0 = y0.max(0).min(self.height as isize);
+        for (x, y) in line_drawing::Bresenham::new((x0, y0), (x1, y1)) {
+            if let Some(i) = self.grid_idx(x, y) {
+                self.grid[i].set(alive);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn grid_idx<I: std::convert::TryInto<usize>>(&self, x: I, y: I) -> Option<usize> {
+        if let (Ok(x), Ok(y)) = (x.try_into(), y.try_into()) {
+            if x < self.width && y < self.height {
+                Some(x + y * self.width)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }

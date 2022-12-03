@@ -5,7 +5,11 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-log = "0.4.17"						# https://crates.io/crates/log
+byteorder = "1.4.3"
+getrandom = "0.2.8"
+line_drawing = "1.0.0"
+log = "0.4.17"
 pixels = "0.10.0"
+randomize = "3.0.1"
 winit = "0.27.5"					# https://docs.rs/winit/latest/winit/#
 winit_input_helper = "0.13.0"		# https://crates.io/crates/winit_input_helper
