@@ -14,28 +14,21 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-const WIDTH: u32 = 400;
-const HEIGHT: u32 = 400;
+const WIDTH: u32 = 800;
+const HEIGHT: u32 = 800;
 
 fn get_window_size() -> LogicalSize<f64> {
     return LogicalSize::new(WIDTH as f64, HEIGHT as f64);
 }
 
-fn get_window_size_scaled() -> LogicalSize<f64> {
-    let mut ls = get_window_size();
-    ls.width = ls.width * 3.0;
-    ls.height = ls.height * 3.0;
-
-    return ls;
-}
-
 fn main() -> Result<(), Error> {
+    env_logger::init();
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
 
     let window = {
         let size = get_window_size();
-        let scaled_size = get_window_size_scaled();
+        // let scaled_size = get_window_size_scaled();
         WindowBuilder::new()
             .with_title("hello world!")
             .with_inner_size(size)
@@ -57,8 +50,13 @@ fn main() -> Result<(), Error> {
     let mut draw_state: Option<bool> = None;
 
     event_loop.run(move |event, _, control_flow| {
+        // log::info!("<loop>");
+
         if let Event::RedrawRequested(_) = event {
-            life.draw(pixels.get_frame_mut());
+            if !paused {
+                life.update();
+                life.draw(pixels.get_frame_mut());
+            }
 
             if pixels
                 .render()
@@ -71,34 +69,44 @@ fn main() -> Result<(), Error> {
         }
 
         if input.update(&event) {
+            // ===========================
             // Keyboard events
-            //
+            // ===========================
 
             // [ESCAPE]     = Quit
-            //
             if input.key_pressed(VirtualKeyCode::Escape) || input.quit() {
+                log::info!("Escape pressed. Quitting..");
                 *control_flow = ControlFlow::Exit;
                 return;
             }
 
-            // [P]          = Toggle Pause
-            //
-            if input.key_pressed(VirtualKeyCode::P) {
-                paused = !paused;
-            }
-
             // [SPACE]      = Pause (for frame step)
             if input.key_pressed_os(VirtualKeyCode::Space) {
+                log::info!("'SPACE' pressed. Pausing..");
                 paused = true;
+            }
+
+            // [P]          = Toggle Pause
+            if input.key_pressed(VirtualKeyCode::P) {
+                log::info!("'P' pressed. Toggling pause..");
+                paused = !paused;
             }
 
             // [R]          = Randomize TGOL
             if input.key_pressed(VirtualKeyCode::R) {
+                log::info!("'R' pressed. Randomizing..");
                 life.randomize();
             }
 
+            // [K]          = KILL Random cells
+            if input.key_pressed(VirtualKeyCode::K) {
+                let kill_count = life.randomly_kill();
+                log::info!("'K' pressed. Randomly killed {:?} cells..", kill_count);
+            }
+
+            // ================================
             // Mouse events
-            //
+            // ================================
             let (mouse_cell, mouse_prev_cell) = input
                 .mouse()
                 .map(|(mx, my)| {
@@ -143,7 +151,7 @@ fn main() -> Result<(), Error> {
                         draw_alive,
                     );
 
-                    life.draw(pixels.get_frame_mut());
+                    // life.draw(pixels.get_frame_mut());
                 }
 
                 // If they let go or are otherwise not clicking anymore, stop drawing.
@@ -153,15 +161,17 @@ fn main() -> Result<(), Error> {
                 }
             }
 
-            // Resize the window
-            //
-            if let Some(size) = input.window_resized() {
-                pixels.resize_surface(size.width, size.height);
-            }
+            // ====================================
+            // WINDOW RESIZE events
+            // ====================================
 
-            if !paused || input.key_pressed_os(VirtualKeyCode::Space) {
-                //life.update();
-                life.draw(pixels.get_frame_mut());
+            if let Some(size) = input.window_resized() {
+                log::info!(
+                    "Window resize. Width: {:?}, Height: {:?}",
+                    size.width,
+                    size.height
+                );
+                pixels.resize_surface(size.width, size.height);
             }
 
             window.request_redraw();
@@ -187,38 +197,44 @@ fn generate_seed() -> (u64, u64) {
 #[derive(Clone, Copy, Debug, Default)]
 struct Cell {
     // Alive: Is this cell active or not
-    //
     alive: bool,
 
     // Heat: Trailing effect of the cell. Decays over time.
-    //
     heat: u8,
 }
 
 impl Cell {
     // Initialize a new cell (alive or dead)
     fn new(alive: bool) -> Self {
+        let heat = if alive { 255 } else { 0 };
         Self {
             alive: alive,
-            heat: 0,
+            heat: heat,
+        }
+    }
+
+    // cools off a cell, returns T if the cell was alive
+    // but has died. Otherwise false.
+    fn cool_if_dead(&mut self) {
+        if !self.alive && self.heat > 0 {
+            self.heat = self.heat.saturating_sub(1);
         }
     }
 
     fn set(&mut self, alive: bool) {
         self.alive = alive;
-    }
 
-    fn toggle(&mut self) -> bool {
-        self.alive = !self.alive;
-        self.alive
+        if self.alive {
+            self.heat = 255;
+        }
     }
 }
 
 const CELL_ALIVE_THRESHOLD: f32 = 0.3;
-const GREEN: [u8; 4] = [0, 255, 0, 255];
-//const RED: [u8; 4] = [255, 0, 0, 255];
-//const BLUE: [u8; 4] = [0, 0, 255, 255];
-//const YELLOW: [u8; 4] = [255, 255, 0, 255];
+// const GREEN: [u8; 4] = [0, 255, 0, 255];
+// const RED: [u8; 4] = [255, 0, 0, 255];
+// const BLUE: [u8; 4] = [0, 0, 255, 255];
+// const YELLOW: [u8; 4] = [255, 255, 0, 255];
 
 struct Grid {
     grid: Vec<Cell>,
@@ -250,37 +266,62 @@ impl Grid {
         // TODO: Once we smooth out the randomness get rid of the leftover heatmap
     }
 
+    fn randomly_kill(&mut self) -> u32 {
+        let mut rand: randomize::PCG32 = generate_seed().into();
+        let mut kill_count: u32 = 0;
+
+        for cell in self.grid.iter_mut() {
+            if cell.alive {
+                let kill = randomize::f32_half_open_right(rand.next_u32()) > CELL_ALIVE_THRESHOLD;
+                if kill {
+                    cell.set(false);
+                    kill_count += 1;
+                }
+            }
+        }
+
+        kill_count
+    }
+
     fn draw(&self, screen: &mut [u8]) {
         debug_assert_eq!(screen.len(), 4 * self.grid.len());
 
         for (cell, pix) in self.grid.iter().zip(screen.chunks_exact_mut(4)) {
-            let color = if cell.alive {
-                GREEN
-            } else {
-                [0, 0, cell.heat, 0xff]
-            };
+            let color = [0, cell.heat, 0, cell.heat];
 
             pix.copy_from_slice(&color);
         }
     }
 
+    fn update(&mut self) {
+        // TODO: First step just decay the 'alive' cells.
+        for cell in self.grid.iter_mut() {
+            cell.cool_if_dead();
+        }
+    }
+
     fn toggle(&mut self, x: isize, y: isize) -> bool {
         if let Some(i) = self.grid_idx(x, y) {
-            self.grid[i].toggle()
+            if self.grid[i].alive {
+                self.grid[i].set(false);
+                false
+            } else {
+                self.grid[i].set(true);
+                true
+            }
         } else {
             false
         }
     }
 
     fn set_line(&mut self, x0: isize, y0: isize, x1: isize, y1: isize, alive: bool) {
-        // probably should do sutherland-hodgeman if this were more serious.
-        // instead just clamp the start pos, and draw until moving towards the
-        // end pos takes us out of bounds.
         let x0 = x0.max(0).min(self.width as isize);
         let y0 = y0.max(0).min(self.height as isize);
         for (x, y) in line_drawing::Bresenham::new((x0, y0), (x1, y1)) {
             if let Some(i) = self.grid_idx(x, y) {
-                self.grid[i].set(alive);
+                if !self.grid[i].alive {
+                    self.grid[i].set(true);
+                }
             } else {
                 break;
             }
