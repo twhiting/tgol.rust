@@ -14,11 +14,11 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-const WIDTH: u32 = 600;
-const HEIGHT: u32 = 600;
+const WIDTH: u32 = 16 * 24;
+const HEIGHT: u32 = 10 * 24;
 
 fn get_window_size() -> LogicalSize<f64> {
-    return LogicalSize::new(WIDTH as f64, HEIGHT as f64);
+    LogicalSize::new(WIDTH as f64, HEIGHT as f64)
 }
 
 fn main() -> Result<(), Error> {
@@ -28,7 +28,7 @@ fn main() -> Result<(), Error> {
 
     let window = {
         let size = get_window_size();
-        // let scaled_size = get_window_size_scaled();
+
         WindowBuilder::new()
             .with_title("hello world!")
             .with_inner_size(size)
@@ -43,11 +43,11 @@ fn main() -> Result<(), Error> {
         Pixels::new(WIDTH, HEIGHT, surface_texture)?
     };
 
-    let mut life = Grid::new_empty_grid(WIDTH as usize, HEIGHT as usize);
-    life.randomize();
-
     let mut paused = false;
     let mut draw_state: Option<bool> = None;
+
+    let mut life = Grid::new_empty_grid(WIDTH as usize, HEIGHT as usize);
+    life.randomize();
 
     event_loop.run(move |event, _, control_flow| {
         // log::info!("<loop>");
@@ -171,6 +171,7 @@ fn main() -> Result<(), Error> {
                     size.width,
                     size.height
                 );
+
                 pixels.resize_surface(size.width, size.height);
             }
 
@@ -215,9 +216,9 @@ impl Cell {
 
     // cools off a cell, returns T if the cell was alive
     // but has died. Otherwise false.
-    fn cool_if_dead(&mut self) {
+    fn cool_if_dead(&mut self, subtract_count: u8) {
         if !self.alive && self.heat > 0 {
-            self.heat = self.heat.saturating_sub(1);
+            self.heat = self.heat.saturating_sub(subtract_count);
         }
     }
 
@@ -231,10 +232,6 @@ impl Cell {
 }
 
 const CELL_ALIVE_THRESHOLD: f32 = 0.3;
-// const GREEN: [u8; 4] = [0, 255, 0, 255];
-// const RED: [u8; 4] = [255, 0, 0, 255];
-// const BLUE: [u8; 4] = [0, 0, 255, 255];
-// const YELLOW: [u8; 4] = [255, 255, 0, 255];
 
 struct Grid {
     grid: Vec<Cell>,
@@ -254,7 +251,8 @@ impl Grid {
             .checked_mul(self.height)
             .expect("Grid too big (overflow)");
 
-        let mut grid_tmp: Vec<Cell> = vec![Cell::default(); size];
+        // let mut grid_tmp: Vec<Cell> = vec![Cell::default(); size];
+        let mut grid_tmp = self.grid.clone();
 
         //
         // Compute, figure out what the next grid frame is going to look like.
@@ -281,7 +279,7 @@ impl Grid {
                     }
 
                     grid_tmp[cell].set(false); // RULE #3
-                    grid_tmp[cell].cool_if_dead();
+                    grid_tmp[cell].cool_if_dead(50);
                 } else {
                     assert!(false);
                 }
@@ -333,9 +331,6 @@ impl Grid {
     }
 
     fn new_empty_grid(width: usize, height: usize) -> Self {
-        assert!(width != 0);
-        assert!(height != 0);
-
         let size = width.checked_mul(height).expect("Grid too big (overflow)");
         Self {
             grid: vec![Cell::default(); size],
@@ -351,8 +346,8 @@ impl Grid {
             let alive = randomize::f32_half_open_right(rand.next_u32()) > CELL_ALIVE_THRESHOLD;
             *cell = Cell::new(alive);
         }
-        // TODO: Smooth out the noise from randomness
-        // TODO: Once we smooth out the randomness get rid of the leftover heatmap
+
+        self.normalize(5);
     }
 
     fn randomly_kill(&mut self) -> u32 {
@@ -372,23 +367,30 @@ impl Grid {
         kill_count
     }
 
+    // const GREEN: [u8; 4] = [0, 255, 0, 255];
+    // const RED: [u8; 4] = [255, 0, 0, 255];
+    // const BLUE: [u8; 4] = [0, 0, 255, 255];
+    // const YELLOW: [u8; 4] = [255, 255, 0, 255];
+
     fn draw(&self, screen: &mut [u8]) {
         debug_assert_eq!(screen.len(), 4 * self.grid.len());
 
         for (cell, pix) in self.grid.iter().zip(screen.chunks_exact_mut(4)) {
-            let color = [0, cell.heat, 0, cell.heat];
+            let color = if !cell.alive {
+                [
+                    cell.heat.saturating_sub(100),
+                    0,
+                    cell.heat.saturating_sub(30),
+                    cell.heat.saturating_sub(30),
+                ]
+            } else {
+                [50, 0, 0xff, 0xff]
+            };
 
             pix.copy_from_slice(&color);
         }
     }
 
-    /*   fn update(&mut self) {
-           // TODO: First step just decay the 'alive' cells.
-           for cell in self.grid.iter_mut() {
-               cell.cool_if_dead();
-           }
-       }
-    */
     fn toggle(&mut self, x: isize, y: isize) -> bool {
         if let Some(i) = self.grid_idx(x, y) {
             if self.grid[i].alive {
@@ -413,6 +415,24 @@ impl Grid {
                 }
             } else {
                 break;
+            }
+        }
+    }
+
+    fn normalize(&mut self, generations: usize) {
+        // Kill of a random amount of the cells. The grid starts too noisy.
+        self.randomly_kill();
+
+        // Pass x amount of generations.
+        for _ in 0..generations {
+            self.update();
+        }
+
+        // Now we need to cool off the heatmap that is leftover
+        // Otherwise is looks messy.
+        for cell in self.grid.iter_mut() {
+            if !cell.alive {
+                cell.heat = 0;
             }
         }
     }
