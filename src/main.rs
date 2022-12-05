@@ -14,8 +14,8 @@ use winit::{
 };
 use winit_input_helper::WinitInputHelper;
 
-const WIDTH: u32 = 800;
-const HEIGHT: u32 = 800;
+const WIDTH: u32 = 600;
+const HEIGHT: u32 = 600;
 
 fn get_window_size() -> LogicalSize<f64> {
     return LogicalSize::new(WIDTH as f64, HEIGHT as f64);
@@ -136,13 +136,13 @@ fn main() -> Result<(), Error> {
                 let release = input.mouse_released(0);
                 let held = input.mouse_held(0);
 
-                debug!("Draw at {:?} => {:?}", mouse_prev_cell, mouse_cell);
-                debug!("Mouse held {:?}, release {:?}", held, release);
+                // debug!("Draw at {:?} => {:?}", mouse_prev_cell, mouse_cell);
+                // debug!("Mouse held {:?}, release {:?}", held, release);
 
                 // If they either released (finishing the drawing) or are still
                 // in the middle of drawing, keep going.
                 if release || held {
-                    debug!("Draw line of {:?}", draw_alive);
+                    // debug!("Draw line of {:?}", draw_alive);
                     life.set_line(
                         mouse_prev_cell.0,
                         mouse_prev_cell.1,
@@ -243,6 +243,51 @@ struct Grid {
 }
 
 impl Grid {
+    fn count_neibs(&self, x: usize, y: usize) -> usize {
+        let (xm1, xp1) = if x == 0 {
+            (self.width - 1, x + 1)
+        } else if x == self.width - 1 {
+            (x - 1, 0)
+        } else {
+            (x - 1, x + 1)
+        };
+        let (ym1, yp1) = if y == 0 {
+            (self.height - 1, y + 1)
+        } else if y == self.height - 1 {
+            (y - 1, 0)
+        } else {
+            (y - 1, y + 1)
+        };
+
+        self.grid[xm1 + ym1 * self.width].alive as usize
+            + self.grid[x + ym1 * self.width].alive as usize
+            + self.grid[xp1 + ym1 * self.width].alive as usize
+            + self.grid[xm1 + y * self.width].alive as usize
+            + self.grid[xp1 + y * self.width].alive as usize
+            + self.grid[xm1 + yp1 * self.width].alive as usize
+            + self.grid[x + yp1 * self.width].alive as usize
+            + self.grid[xp1 + yp1 * self.width].alive as usize
+    }
+
+    fn update(&mut self) {
+
+        let mut grid_tmp: Vec<Cell> = vec![Cell::default(), self.width, self.height]
+
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let neibs = self.count_neibs(x, y);
+                let idx = x + y * self.width;
+                let next = self.grid[idx].update_neibs(neibs);
+                next.cool_if_dead();
+
+                // Write into scratch_cells, since we're still reading from `self.cells`
+                self.grid_tmp[idx] = next;
+            }
+        }
+
+        std::mem::swap(&mut grid_tmp, &mut self.grid);
+    }
+
     fn new_empty_grid(width: usize, height: usize) -> Self {
         assert!(width != 0);
         assert!(height != 0);
@@ -293,13 +338,13 @@ impl Grid {
         }
     }
 
-    fn update(&mut self) {
-        // TODO: First step just decay the 'alive' cells.
-        for cell in self.grid.iter_mut() {
-            cell.cool_if_dead();
-        }
-    }
-
+    /*   fn update(&mut self) {
+           // TODO: First step just decay the 'alive' cells.
+           for cell in self.grid.iter_mut() {
+               cell.cool_if_dead();
+           }
+       }
+    */
     fn toggle(&mut self, x: isize, y: isize) -> bool {
         if let Some(i) = self.grid_idx(x, y) {
             if self.grid[i].alive {
