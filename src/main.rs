@@ -243,7 +243,65 @@ struct Grid {
 }
 
 impl Grid {
-    fn count_neibs(&self, x: usize, y: usize) -> usize {
+    fn update(&mut self) {
+        //
+        // Allocate a new grid (only swap out after computation has finished.
+        // This way we don't get any 'tearing' if we want to extend this routine
+        // to be multithreaded. For situations like iterating over a clock.
+        //
+        let size = self
+            .width
+            .checked_mul(self.height)
+            .expect("Grid too big (overflow)");
+
+        let mut grid_tmp: Vec<Cell> = vec![Cell::default(); size];
+
+        //
+        // Compute, figure out what the next grid frame is going to look like.
+        //
+
+        for x in 0..self.width {
+            for y in 0..self.height {
+                let neighbors_alive = self.count_neighbors(x, y);
+
+                if let Some(cell) = self.grid_idx(x, y) {
+                    // RULE #1: Any live cell with two or three live neighbours survives.
+                    // RULE #2: Any dead cell with three live neighbours becomes a live cell.
+                    // RULE #3: All other live cells die in the next generation. Similarly, all other dead cells stay dead.
+                    if self.grid[cell].alive {
+                        if neighbors_alive == 2 || neighbors_alive == 3 {
+                            grid_tmp[cell].set(true); // RULE # 1
+                            continue;
+                        }
+                    } else {
+                        if neighbors_alive == 3 {
+                            grid_tmp[cell].set(true); // RULE #2
+                            continue;
+                        }
+                    }
+
+                    grid_tmp[cell].set(false); // RULE #3
+                    grid_tmp[cell].cool_if_dead();
+                } else {
+                    assert!(false);
+                }
+            }
+        }
+
+        //
+        // SWAP, Compute finished.. swap out to the new graph.
+        //
+        std::mem::swap(&mut grid_tmp, &mut self.grid);
+    }
+
+    fn count_neighbors(&self, x: usize, y: usize) -> usize {
+        //
+        // final two sets of coords. an (x1, y1)
+        // that indicates the coords of the neighboring
+        // grid (UP-LEFT) and another set of coords (x2, y2)
+        // that represents the coords to the (BOTTOM-RIGHT)
+        //
+
         let (xm1, xp1) = if x == 0 {
             (self.width - 1, x + 1)
         } else if x == self.width - 1 {
@@ -251,6 +309,7 @@ impl Grid {
         } else {
             (x - 1, x + 1)
         };
+
         let (ym1, yp1) = if y == 0 {
             (self.height - 1, y + 1)
         } else if y == self.height - 1 {
@@ -259,6 +318,10 @@ impl Grid {
             (y - 1, y + 1)
         };
 
+        //
+        // This is a fancy way to add up all the neighboring
+        // cells. If they are alive.
+        //
         self.grid[xm1 + ym1 * self.width].alive as usize
             + self.grid[x + ym1 * self.width].alive as usize
             + self.grid[xp1 + ym1 * self.width].alive as usize
@@ -267,25 +330,6 @@ impl Grid {
             + self.grid[xm1 + yp1 * self.width].alive as usize
             + self.grid[x + yp1 * self.width].alive as usize
             + self.grid[xp1 + yp1 * self.width].alive as usize
-    }
-
-    fn update(&mut self) {
-
-        let mut grid_tmp: Vec<Cell> = vec![Cell::default(), self.width, self.height]
-
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let neibs = self.count_neibs(x, y);
-                let idx = x + y * self.width;
-                let next = self.grid[idx].update_neibs(neibs);
-                next.cool_if_dead();
-
-                // Write into scratch_cells, since we're still reading from `self.cells`
-                self.grid_tmp[idx] = next;
-            }
-        }
-
-        std::mem::swap(&mut grid_tmp, &mut self.grid);
     }
 
     fn new_empty_grid(width: usize, height: usize) -> Self {
