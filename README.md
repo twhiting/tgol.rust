@@ -1,5 +1,13 @@
 # tgol.rust
 [T]he [g]ame [o]f [l]ife -- (Conway) -- Rust
 
-## FOLLOWING THIS EXAMPLE CLOSELY:
-https://github.com/parasyte/pixels/blob/main/examples/conway/src/main.rs
+## Commands:
+
+[K] - Kill a random sampling of cells
+[R] - Randomize
+[P] - Toggle Pause
+[SPACE] - Pause
+
+## Mouse Support
+Click or draw on the grid to create life.
+
