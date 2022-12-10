@@ -30,7 +30,7 @@ fn main() -> Result<(), Error> {
         let size = get_window_size();
 
         WindowBuilder::new()
-            .with_title("hello world!")
+            .with_title(format!("TGOL [{} x {}]", WIDTH, HEIGHT))
             .with_inner_size(size)
             .with_min_inner_size(size)
             .build(&event_loop)
