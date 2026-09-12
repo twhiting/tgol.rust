@@ -44,17 +44,21 @@ pub(crate) fn run() -> Result<(), Error> {
     event_loop.run(move |event, _, control_flow| {
         if let Event::RedrawRequested(_) = event {
             let update_started = debug_overlay.enabled.then(Instant::now);
-            if !paused {
-                life.update();
+            let updating = !paused;
+            if updating {
+                let should_continue = life.update();
                 debug_overlay.record_update(
                     update_started
                         .map(|started| started.elapsed())
                         .unwrap_or_default(),
                 );
+                if !should_continue {
+                    paused = true;
+                }
             }
 
             let render_started = debug_overlay.enabled.then(Instant::now);
-            if !paused {
+            if updating {
                 life.draw(pixels.frame_mut());
             }
 
@@ -64,7 +68,7 @@ pub(crate) fn run() -> Result<(), Error> {
                     .map(|started| started.elapsed())
                     .unwrap_or_default(),
             );
-            debug_overlay.refresh_title(&window, &life, paused, false);
+            debug_overlay.refresh_title(&window, &life, paused, updating && paused);
 
             if render_result
                 .map_err(|error| error!("pixels.render() failed: {}", error))
@@ -140,6 +144,10 @@ pub(crate) fn run() -> Result<(), Error> {
             if input.mouse_pressed(0) {
                 debug!("Mouse click at {:?}", mouse_cell);
                 draw_state = Some(life.toggle(mouse_cell.0, mouse_cell.1));
+                if paused {
+                    paused = false;
+                    debug_overlay.refresh_title(&window, &life, paused, true);
+                }
             } else if let Some(draw_alive) = draw_state {
                 let release = input.mouse_released(0);
                 let held = input.mouse_held(0);
@@ -267,7 +275,7 @@ impl DebugOverlay {
         let population = alive as f64 * 100.0 / grid.cell_count() as f64;
         let state = if paused { "PAUSED" } else { "RUNNING" };
         window.set_title(&format!(
-            "{} | {:.1} FPS | update {:.2} ms | render {:.2} ms | alive {} ({:.1}%) | gen {} | {}",
+            "{} | FPS: '{:.1}' | UPDATE: '{:.2} ms' | RENDER: '{:.2} ms' | ALIVE: '{} ({:.1}%)' | GENERATION: '{}' | STATE: '{}'",
             window_title(),
             self.fps,
             self.average_update_ms,
