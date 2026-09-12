@@ -106,26 +106,8 @@ impl Grid {
         kill_count
     }
 
-    pub(crate) fn draw(&self, screen: &mut [u8]) {
-        debug_assert_eq!(screen.len(), 4 * self.grid.len());
-
-        let (pixels, remainder) = screen.as_chunks_mut::<4>();
-        debug_assert!(remainder.is_empty());
-
-        for (cell, pixel) in self.grid.iter().zip(pixels) {
-            let color = if cell.alive {
-                [50, 0, 0xff, 0xff]
-            } else {
-                [
-                    cell.heat.saturating_sub(100),
-                    0,
-                    cell.heat.saturating_sub(30),
-                    cell.heat.saturating_sub(30),
-                ]
-            };
-
-            pixel.copy_from_slice(&color);
-        }
+    pub(crate) fn cells(&self) -> impl Iterator<Item = (bool, u8)> + '_ {
+        self.grid.iter().map(|cell| (cell.alive, cell.heat))
     }
 
     pub(crate) fn alive_count(&self) -> usize {

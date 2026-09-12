@@ -58,9 +58,7 @@ pub(crate) fn run() -> Result<(), Error> {
             }
 
             let render_started = debug_overlay.enabled.then(Instant::now);
-            if updating {
-                life.draw(pixels.frame_mut());
-            }
+            draw_grid(&life, pixels.frame_mut());
 
             let render_result = pixels.render();
             debug_overlay.record_render(
@@ -110,6 +108,7 @@ pub(crate) fn run() -> Result<(), Error> {
             if input.key_pressed(VirtualKeyCode::R) {
                 log::info!("'R' pressed. Randomizing..");
                 life.randomize();
+                paused = false;
                 debug_overlay.reset_generation();
                 debug_overlay.refresh_title(&window, &life, paused, true);
             }
@@ -117,6 +116,8 @@ pub(crate) fn run() -> Result<(), Error> {
             if input.key_pressed(VirtualKeyCode::K) {
                 let kill_count = life.randomly_kill();
                 log::info!("'K' pressed. Randomly killed {:?} cells..", kill_count);
+                paused = false;
+                debug_overlay.refresh_title(&window, &life, paused, true);
             }
 
             let (mouse_cell, mouse_prev_cell) = input
@@ -168,6 +169,7 @@ pub(crate) fn run() -> Result<(), Error> {
                 }
             }
 
+            let mut resized = false;
             if let Some(size) = input.window_resized() {
                 log::info!(
                     "Window resize. Width: {:?}, Height: {:?}",
@@ -180,11 +182,36 @@ pub(crate) fn run() -> Result<(), Error> {
                     *control_flow = ControlFlow::Exit;
                     return;
                 }
+                resized = true;
             }
 
-            window.request_redraw();
+            if !paused || resized {
+                window.request_redraw();
+            }
         }
     });
+}
+
+fn draw_grid(grid: &Grid, screen: &mut [u8]) {
+    debug_assert_eq!(screen.len(), 4 * grid.cell_count());
+
+    let (pixels, remainder) = screen.as_chunks_mut::<4>();
+    debug_assert!(remainder.is_empty());
+
+    for ((alive, heat), pixel) in grid.cells().zip(pixels) {
+        let color = if alive {
+            [50, 0, 0xff, 0xff]
+        } else {
+            [
+                heat.saturating_sub(100),
+                0,
+                heat.saturating_sub(30),
+                heat.saturating_sub(30),
+            ]
+        };
+
+        pixel.copy_from_slice(&color);
+    }
 }
 
 fn window_size() -> LogicalSize<f64> {
