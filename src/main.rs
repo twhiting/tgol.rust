@@ -55,7 +55,7 @@ fn main() -> Result<(), Error> {
         if let Event::RedrawRequested(_) = event {
             if !paused {
                 life.update();
-                life.draw(pixels.get_frame_mut());
+                life.draw(pixels.frame_mut());
             }
 
             if pixels
@@ -172,7 +172,11 @@ fn main() -> Result<(), Error> {
                     size.height
                 );
 
-                pixels.resize_surface(size.width, size.height);
+                if let Err(error) = pixels.resize_surface(size.width, size.height) {
+                    error!("pixels.resize_surface() failed: {}", error);
+                    *control_flow = ControlFlow::Exit;
+                    return;
+                }
             }
 
             window.request_redraw();
@@ -208,10 +212,7 @@ impl Cell {
     // Initialize a new cell (alive or dead)
     fn new(alive: bool) -> Self {
         let heat = if alive { 255 } else { 0 };
-        Self {
-            alive: alive,
-            heat: heat,
-        }
+        Self { alive, heat }
     }
 
     // cools off a cell, returns T if the cell was alive
@@ -246,12 +247,6 @@ impl Grid {
         // This way we don't get any 'tearing' if we want to extend this routine
         // to be multithreaded. For situations like iterating over a clock.
         //
-        let size = self
-            .width
-            .checked_mul(self.height)
-            .expect("Grid too big (overflow)");
-
-        // let mut grid_tmp: Vec<Cell> = vec![Cell::default(); size];
         let mut grid_tmp = self.grid.clone();
 
         //
@@ -281,7 +276,7 @@ impl Grid {
                     grid_tmp[cell].set(false); // RULE #3
                     grid_tmp[cell].cool_if_dead(50);
                 } else {
-                    assert!(false);
+                    unreachable!("grid coordinates are within bounds");
                 }
             }
         }
@@ -375,7 +370,10 @@ impl Grid {
     fn draw(&self, screen: &mut [u8]) {
         debug_assert_eq!(screen.len(), 4 * self.grid.len());
 
-        for (cell, pix) in self.grid.iter().zip(screen.chunks_exact_mut(4)) {
+        let (pixels, remainder) = screen.as_chunks_mut::<4>();
+        debug_assert!(remainder.is_empty());
+
+        for (cell, pix) in self.grid.iter().zip(pixels) {
             let color = if !cell.alive {
                 [
                     cell.heat.saturating_sub(100),
@@ -410,8 +408,8 @@ impl Grid {
         let y0 = y0.max(0).min(self.height as isize);
         for (x, y) in line_drawing::Bresenham::new((x0, y0), (x1, y1)) {
             if let Some(i) = self.grid_idx(x, y) {
-                if !self.grid[i].alive {
-                    self.grid[i].set(true);
+                if self.grid[i].alive != alive {
+                    self.grid[i].set(alive);
                 }
             } else {
                 break;
