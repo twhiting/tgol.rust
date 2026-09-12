@@ -31,6 +31,9 @@ pub(crate) struct Grid {
     grid: Vec<Cell>,
     width: usize,
     height: usize,
+    cycle_checkpoint: Vec<bool>,
+    cycle_power: usize,
+    cycle_length: usize,
 }
 
 impl Grid {
@@ -40,29 +43,29 @@ impl Grid {
             grid: vec![Cell::default(); size],
             width,
             height,
+            cycle_checkpoint: vec![false; size],
+            cycle_power: 1,
+            cycle_length: 0,
         }
     }
 
-    pub(crate) fn update(&mut self) {
+    pub(crate) fn update(&mut self) -> bool {
         let mut grid_tmp = self.grid.clone();
+        let mut changed = false;
 
         for x in 0..self.width {
             for y in 0..self.height {
                 let neighbors_alive = self.count_neighbors(x, y);
 
                 if let Some(cell) = self.grid_idx(x, y) {
-                    if self.grid[cell].alive {
-                        if neighbors_alive == 2 || neighbors_alive == 3 {
-                            grid_tmp[cell].set(true);
-                            continue;
-                        }
-                    } else if neighbors_alive == 3 {
-                        grid_tmp[cell].set(true);
-                        continue;
-                    }
+                    let was_alive = self.grid[cell].alive;
+                    let is_alive = neighbors_alive == 3 || (was_alive && neighbors_alive == 2);
 
-                    grid_tmp[cell].set(false);
-                    grid_tmp[cell].cool_if_dead(50);
+                    grid_tmp[cell].set(is_alive);
+                    if !is_alive {
+                        grid_tmp[cell].cool_if_dead(50);
+                    }
+                    changed |= was_alive != is_alive;
                 } else {
                     unreachable!("grid coordinates are within bounds");
                 }
@@ -70,6 +73,7 @@ impl Grid {
         }
 
         std::mem::swap(&mut grid_tmp, &mut self.grid);
+        changed && !self.repeats_previous_state()
     }
 
     pub(crate) fn randomize(&mut self) {
@@ -81,6 +85,7 @@ impl Grid {
         }
 
         self.normalize(5);
+        self.reset_cycle_detection();
     }
 
     pub(crate) fn randomly_kill(&mut self) -> u32 {
@@ -97,6 +102,7 @@ impl Grid {
             }
         }
 
+        self.reset_cycle_detection();
         kill_count
     }
 
@@ -134,6 +140,7 @@ impl Grid {
         if let Some(index) = self.grid_idx(x, y) {
             let alive = !self.grid[index].alive;
             self.grid[index].set(alive);
+            self.reset_cycle_detection();
             alive
         } else {
             false
@@ -143,14 +150,19 @@ impl Grid {
     pub(crate) fn set_line(&mut self, x0: isize, y0: isize, x1: isize, y1: isize, alive: bool) {
         let x0 = x0.max(0).min(self.width as isize);
         let y0 = y0.max(0).min(self.height as isize);
+        let mut changed = false;
         for (x, y) in line_drawing::Bresenham::new((x0, y0), (x1, y1)) {
             if let Some(index) = self.grid_idx(x, y) {
                 if self.grid[index].alive != alive {
                     self.grid[index].set(alive);
+                    changed = true;
                 }
             } else {
                 break;
             }
+        }
+        if changed {
+            self.reset_cycle_detection();
         }
     }
 
@@ -185,7 +197,7 @@ impl Grid {
         self.randomly_kill();
 
         for _ in 0..generations {
-            self.update();
+            let _ = self.update();
         }
 
         for cell in &mut self.grid {
@@ -193,6 +205,33 @@ impl Grid {
                 cell.heat = 0;
             }
         }
+    }
+
+    fn repeats_previous_state(&mut self) -> bool {
+        self.cycle_length += 1;
+        let repeats = self
+            .grid
+            .iter()
+            .map(|cell| cell.alive)
+            .eq(self.cycle_checkpoint.iter().copied());
+
+        if !repeats && self.cycle_length == self.cycle_power {
+            self.cycle_checkpoint.clear();
+            self.cycle_checkpoint
+                .extend(self.grid.iter().map(|cell| cell.alive));
+            self.cycle_power = self.cycle_power.saturating_mul(2);
+            self.cycle_length = 0;
+        }
+
+        repeats
+    }
+
+    fn reset_cycle_detection(&mut self) {
+        self.cycle_checkpoint.clear();
+        self.cycle_checkpoint
+            .extend(self.grid.iter().map(|cell| cell.alive));
+        self.cycle_power = 1;
+        self.cycle_length = 0;
     }
 
     fn grid_idx<I: TryInto<usize>>(&self, x: I, y: I) -> Option<usize> {
@@ -220,3 +259,7 @@ fn generate_seed() -> (u64, u64) {
         NativeEndian::read_u64(&seed[8..16]),
     )
 }
+
+#[cfg(test)]
+#[path = "../Tests/Unit/life.rs"]
+mod tests;

@@ -23,4 +23,17 @@
 > cargo run
 ```
 
+## Testing
+
+```bash
+# Run all tests
+> cargo test
+
+# List available tests
+> cargo test -- --list
+
+# Run a specific test
+> cargo test stationary_block_reports_no_change
+```
+
 ![image](https://user-images.githubusercontent.com/10718586/206619448-503181a6-4bc0-4f56-8ed4-2413f7aedbef.png)
