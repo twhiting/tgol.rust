@@ -4,13 +4,17 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
+
 use log::{debug, error};
-use pixels::{Error, Pixels, SurfaceTexture};
+use pixels::{Pixels, SurfaceTexture};
 use winit::{
+    application::ApplicationHandler,
     dpi::LogicalSize,
-    event::{Event, VirtualKeyCode},
-    event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
+    event::{DeviceEvent, DeviceId, MouseButton, StartCause, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::KeyCode,
+    window::{Window, WindowId},
 };
 use winit_input_helper::WinitInputHelper;
 
@@ -21,163 +25,228 @@ fn get_window_size() -> LogicalSize<f64> {
     LogicalSize::new(WIDTH as f64, HEIGHT as f64)
 }
 
-fn main() -> Result<(), Error> {
-    env_logger::init();
-    let event_loop = EventLoop::new();
-    let mut input = WinitInputHelper::new();
+struct App {
+    window: Option<Arc<Window>>,
+    pixels: Option<Pixels<'static>>,
+    input: WinitInputHelper,
+    life: Grid,
+    paused: bool,
+    draw_state: Option<bool>,
+}
 
-    let window = {
+impl App {
+    fn new() -> Self {
+        let mut life = Grid::new_empty_grid(WIDTH as usize, HEIGHT as usize);
+        life.randomize();
+
+        Self {
+            window: None,
+            pixels: None,
+            input: WinitInputHelper::new(),
+            life,
+            paused: false,
+            draw_state: None,
+        }
+    }
+
+    fn render(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(pixels) = self.pixels.as_mut() else {
+            return;
+        };
+
+        if !self.paused {
+            self.life.update();
+            self.life.draw(pixels.frame_mut());
+        }
+
+        if let Err(e) = pixels.render() {
+            error!("pixels.render() failed: {}", e);
+            event_loop.exit();
+        }
+    }
+
+    fn handle_input(&mut self, event_loop: &ActiveEventLoop) {
+        let input = &self.input;
+
+        // ===========================
+        // Keyboard events
+        // ===========================
+
+        // [ESCAPE]     = Quit
+        if input.key_pressed(KeyCode::Escape) || input.close_requested() || input.destroyed() {
+            log::info!("Escape pressed. Quitting..");
+            event_loop.exit();
+            return;
+        }
+
+        // [SPACE]      = Pause (for frame step)
+        if input.key_pressed_os(KeyCode::Space) {
+            log::info!("'SPACE' pressed. Pausing..");
+            self.paused = true;
+        }
+
+        // [P]          = Toggle Pause
+        if input.key_pressed(KeyCode::KeyP) {
+            log::info!("'P' pressed. Toggling pause..");
+            self.paused = !self.paused;
+        }
+
+        // [R]          = Randomize TGOL
+        if input.key_pressed(KeyCode::KeyR) {
+            log::info!("'R' pressed. Randomizing..");
+            self.life.randomize();
+        }
+
+        // [K]          = KILL Random cells
+        if input.key_pressed(KeyCode::KeyK) {
+            let kill_count = self.life.randomly_kill();
+            log::info!("'K' pressed. Randomly killed {:?} cells..", kill_count);
+        }
+
+        let Some(pixels) = self.pixels.as_mut() else {
+            return;
+        };
+
+        // ================================
+        // Mouse events
+        // ================================
+        let (mouse_cell, mouse_prev_cell) = input
+            .cursor()
+            .map(|(mx, my)| {
+                let (dx, dy) = input.cursor_diff();
+                let prev_x = mx - dx;
+                let prev_y = my - dy;
+
+                let (mx_i, my_i) = pixels
+                    .window_pos_to_pixel((mx, my))
+                    .unwrap_or_else(|pos| pixels.clamp_pixel_pos(pos));
+
+                let (px_i, py_i) = pixels
+                    .window_pos_to_pixel((prev_x, prev_y))
+                    .unwrap_or_else(|pos| pixels.clamp_pixel_pos(pos));
+
+                (
+                    (mx_i as isize, my_i as isize),
+                    (px_i as isize, py_i as isize),
+                )
+            })
+            .unwrap_or_default();
+
+        if input.mouse_pressed(MouseButton::Left) {
+            debug!("Mouse click at {:?}", mouse_cell);
+            self.draw_state = Some(self.life.toggle(mouse_cell.0, mouse_cell.1));
+        } else if let Some(draw_alive) = self.draw_state {
+            let release = input.mouse_released(MouseButton::Left);
+            let held = input.mouse_held(MouseButton::Left);
+
+            // If they either released (finishing the drawing) or are still
+            // in the middle of drawing, keep going.
+            if release || held {
+                self.life.set_line(
+                    mouse_prev_cell.0,
+                    mouse_prev_cell.1,
+                    mouse_cell.0,
+                    mouse_cell.1,
+                    draw_alive,
+                );
+            }
+
+            // If they let go or are otherwise not clicking anymore, stop drawing.
+            if release || !held {
+                debug!("Draw end");
+                self.draw_state = None;
+            }
+        }
+
+        // ====================================
+        // WINDOW RESIZE events
+        // ====================================
+
+        if let Some(size) = input.window_resized() {
+            log::info!(
+                "Window resize. Width: {:?}, Height: {:?}",
+                size.width,
+                size.height
+            );
+
+            if let Err(e) = pixels.resize_surface(size.width, size.height) {
+                error!("pixels.resize_surface() failed: {}", e);
+                event_loop.exit();
+            }
+        }
+    }
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
         let size = get_window_size();
-
-        WindowBuilder::new()
+        let attributes = Window::default_attributes()
             .with_title(format!("TGOL [{} x {}]", WIDTH, HEIGHT))
             .with_inner_size(size)
-            .with_min_inner_size(size)
-            .build(&event_loop)
-            .unwrap()
-    };
+            .with_min_inner_size(size);
 
-    let mut pixels = {
-        let window_size = window.inner_size();
-        let surface_texture = SurfaceTexture::new(window_size.width, window_size.height, &window);
-        Pixels::new(WIDTH, HEIGHT, surface_texture)?
-    };
-
-    let mut paused = false;
-    let mut draw_state: Option<bool> = None;
-
-    let mut life = Grid::new_empty_grid(WIDTH as usize, HEIGHT as usize);
-    life.randomize();
-
-    event_loop.run(move |event, _, control_flow| {
-        // log::info!("<loop>");
-
-        if let Event::RedrawRequested(_) = event {
-            if !paused {
-                life.update();
-                life.draw(pixels.get_frame_mut());
+        let window = match event_loop.create_window(attributes) {
+            Ok(window) => Arc::new(window),
+            Err(e) => {
+                error!("Failed to create window: {}", e);
+                event_loop.exit();
+                return;
             }
+        };
 
-            if pixels
-                .render()
-                .map_err(|e| error!("pixels.render() failed: {}", e))
-                .is_err()
-            {
-                *control_flow = ControlFlow::Exit;
+        let window_size = window.inner_size();
+        let surface_texture =
+            SurfaceTexture::new(window_size.width, window_size.height, window.clone());
+
+        match Pixels::new(WIDTH, HEIGHT, surface_texture) {
+            Ok(pixels) => self.pixels = Some(pixels),
+            Err(e) => {
+                error!("Failed to create pixel buffer: {}", e);
+                event_loop.exit();
                 return;
             }
         }
 
-        if input.update(&event) {
-            // ===========================
-            // Keyboard events
-            // ===========================
+        window.request_redraw();
+        self.window = Some(window);
+    }
 
-            // [ESCAPE]     = Quit
-            if input.key_pressed(VirtualKeyCode::Escape) || input.quit() {
-                log::info!("Escape pressed. Quitting..");
-                *control_flow = ControlFlow::Exit;
-                return;
-            }
+    fn new_events(&mut self, _: &ActiveEventLoop, _: StartCause) {
+        self.input.step();
+    }
 
-            // [SPACE]      = Pause (for frame step)
-            if input.key_pressed_os(VirtualKeyCode::Space) {
-                log::info!("'SPACE' pressed. Pausing..");
-                paused = true;
-            }
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        if self.input.process_window_event(&event) {
+            self.render(event_loop);
+        }
+    }
 
-            // [P]          = Toggle Pause
-            if input.key_pressed(VirtualKeyCode::P) {
-                log::info!("'P' pressed. Toggling pause..");
-                paused = !paused;
-            }
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        self.input.process_device_event(&event);
+    }
 
-            // [R]          = Randomize TGOL
-            if input.key_pressed(VirtualKeyCode::R) {
-                log::info!("'R' pressed. Randomizing..");
-                life.randomize();
-            }
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.input.end_step();
+        self.handle_input(event_loop);
 
-            // [K]          = KILL Random cells
-            if input.key_pressed(VirtualKeyCode::K) {
-                let kill_count = life.randomly_kill();
-                log::info!("'K' pressed. Randomly killed {:?} cells..", kill_count);
-            }
-
-            // ================================
-            // Mouse events
-            // ================================
-            let (mouse_cell, mouse_prev_cell) = input
-                .mouse()
-                .map(|(mx, my)| {
-                    let (dx, dy) = input.mouse_diff();
-                    let prev_x = mx - dx;
-                    let prev_y = my - dy;
-
-                    let (mx_i, my_i) = pixels
-                        .window_pos_to_pixel((mx, my))
-                        .unwrap_or_else(|pos| pixels.clamp_pixel_pos(pos));
-
-                    let (px_i, py_i) = pixels
-                        .window_pos_to_pixel((prev_x, prev_y))
-                        .unwrap_or_else(|pos| pixels.clamp_pixel_pos(pos));
-
-                    (
-                        (mx_i as isize, my_i as isize),
-                        (px_i as isize, py_i as isize),
-                    )
-                })
-                .unwrap_or_default();
-
-            if input.mouse_pressed(0) {
-                debug!("Mouse click at {:?}", mouse_cell);
-                draw_state = Some(life.toggle(mouse_cell.0, mouse_cell.1));
-            } else if let Some(draw_alive) = draw_state {
-                let release = input.mouse_released(0);
-                let held = input.mouse_held(0);
-
-                // debug!("Draw at {:?} => {:?}", mouse_prev_cell, mouse_cell);
-                // debug!("Mouse held {:?}, release {:?}", held, release);
-
-                // If they either released (finishing the drawing) or are still
-                // in the middle of drawing, keep going.
-                if release || held {
-                    // debug!("Draw line of {:?}", draw_alive);
-                    life.set_line(
-                        mouse_prev_cell.0,
-                        mouse_prev_cell.1,
-                        mouse_cell.0,
-                        mouse_cell.1,
-                        draw_alive,
-                    );
-
-                    // life.draw(pixels.get_frame_mut());
-                }
-
-                // If they let go or are otherwise not clicking anymore, stop drawing.
-                if release || !held {
-                    debug!("Draw end");
-                    draw_state = None;
-                }
-            }
-
-            // ====================================
-            // WINDOW RESIZE events
-            // ====================================
-
-            if let Some(size) = input.window_resized() {
-                log::info!(
-                    "Window resize. Width: {:?}, Height: {:?}",
-                    size.width,
-                    size.height
-                );
-
-                pixels.resize_surface(size.width, size.height);
-            }
-
+        if let Some(window) = &self.window {
             window.request_redraw();
         }
-    });
+    }
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+
+    let event_loop = EventLoop::new()?;
+    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.run_app(&mut App::new())?;
+
+    Ok(())
 }
 
 /// Generate a pseudorandom seed for the game's PRNG.
