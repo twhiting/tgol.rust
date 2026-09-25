@@ -246,12 +246,6 @@ impl Grid {
         // This way we don't get any 'tearing' if we want to extend this routine
         // to be multithreaded. For situations like iterating over a clock.
         //
-        let size = self
-            .width
-            .checked_mul(self.height)
-            .expect("Grid too big (overflow)");
-
-        // let mut grid_tmp: Vec<Cell> = vec![Cell::default(); size];
         let mut grid_tmp = self.grid.clone();
 
         //
@@ -410,8 +404,8 @@ impl Grid {
         let y0 = y0.max(0).min(self.height as isize);
         for (x, y) in line_drawing::Bresenham::new((x0, y0), (x1, y1)) {
             if let Some(i) = self.grid_idx(x, y) {
-                if !self.grid[i].alive {
-                    self.grid[i].set(true);
+                if self.grid[i].alive != alive {
+                    self.grid[i].set(alive);
                 }
             } else {
                 break;
