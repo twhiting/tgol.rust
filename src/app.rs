@@ -19,13 +19,18 @@ const HEIGHT: u32 = 10 * 24;
 pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
-    event_loop.run_app(&mut App::new())?;
-    Ok(())
+    let mut app = App::new();
+    event_loop.run_app(&mut app)?;
+    match app.startup_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 struct App {
     window: Option<Arc<Window>>,
     pixels: Option<Pixels<'static>>,
+    startup_error: Option<Box<dyn std::error::Error>>,
     input: WinitInputHelper,
     life: Grid,
     paused: bool,
@@ -41,6 +46,7 @@ impl App {
         Self {
             window: None,
             pixels: None,
+            startup_error: None,
             input: WinitInputHelper::new(),
             life,
             paused: false,
@@ -197,6 +203,10 @@ impl App {
                 size.height
             );
 
+            if size.width == 0 || size.height == 0 {
+                return;
+            }
+
             if let Err(error) = pixels.resize_surface(size.width, size.height) {
                 error!("pixels.resize_surface() failed: {}", error);
                 event_loop.exit();
@@ -227,6 +237,7 @@ impl ApplicationHandler for App {
             Ok(window) => Arc::new(window),
             Err(error) => {
                 error!("Failed to create window: {}", error);
+                self.startup_error = Some(Box::new(error));
                 event_loop.exit();
                 return;
             }
@@ -240,6 +251,7 @@ impl ApplicationHandler for App {
             Ok(pixels) => self.pixels = Some(pixels),
             Err(error) => {
                 error!("Failed to create pixel buffer: {}", error);
+                self.startup_error = Some(Box::new(error));
                 event_loop.exit();
                 return;
             }
