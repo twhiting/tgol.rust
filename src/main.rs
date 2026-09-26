@@ -7,7 +7,7 @@
 mod app;
 mod life;
 
-fn main() -> Result<(), pixels::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     app::run()
 }
